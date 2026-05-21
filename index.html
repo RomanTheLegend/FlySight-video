@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlySight Speedometer Video Renderer</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.min.js"></script>
+<style>
+  :root {
+    --bg:        #0a0a0b;
+    --panel:     #111113;
+    --border:    #222226;
+    --border2:   #2e2e34;
+    --amber:     #e8930a;
+    --amber-dim: #7a4d06;
+    --amber-glow:#ffb13a;
+    --red:       #dc2626;
+    --text:      #c8c8cc;
+    --text-dim:  #666670;
+    --green:     #22c55e;
+    --track:     #1a1a1e;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Barlow Condensed', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ── Header ── */
+  header {
+    width: 100%;
+    border-bottom: 1px solid var(--border);
+    padding: 18px 32px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #e8e8ec;
+  }
+  header span {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    color: var(--amber);
+    letter-spacing: .1em;
+  }
+
+  /* ── Main layout ── */
+  main {
+    width: 100%;
+    max-width: 900px;
+    padding: 32px 20px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .card-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .card-body {
+    padding: 20px;
+  }
+
+  /* ── File drop zone ── */
+  .dropzone {
+    border: 1px dashed var(--border2);
+    border-radius: 4px;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    position: relative;
+  }
+  .dropzone:hover, .dropzone.drag-over {
+    border-color: var(--amber);
+    background: rgba(232,147,10,.04);
+  }
+  .dropzone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .dropzone-icon {
+    font-size: 32px;
+    margin-bottom: 10px;
+    opacity: .5;
+  }
+  .dropzone p { font-size: 15px; color: var(--text-dim); }
+  .dropzone p strong { color: var(--amber); font-weight: 600; }
+  .dropzone .filename {
+    margin-top: 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    color: var(--amber-glow);
+  }
+
+  /* ── Radio group ── */
+  .radio-group {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    overflow: hidden;
+    width: fit-content;
+  }
+  .radio-group label {
+    padding: 10px 24px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-right: 1px solid var(--border2);
+    transition: background .15s, color .15s;
+    user-select: none;
+  }
+  .radio-group label:last-child { border-right: none; }
+  .radio-group input[type=radio] { display: none; }
+  .radio-group input[type=radio]:checked + span {
+    background: var(--amber);
+    color: #000;
+  }
+  .radio-group label:has(input:checked) {
+    background: var(--amber);
+    color: #000;
+  }
+
+  /* ── Settings row ── */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 520px) { .settings-grid { grid-template-columns: 1fr; } }
+
+  .field label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .field input[type=number], .field select {
+    width: 100%;
+    background: var(--track);
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 14px;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--amber); }
+  .field input:disabled, .field select:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ── Preview canvas ── */
+  #preview-wrap {
+    width: 100%;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    aspect-ratio: 16/9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  #preview-wrap canvas {
+    max-width: 100%;
+    max-height: 100%;
+    display: block;
+  }
+  #preview-placeholder {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: .1em;
+  }
+
+  /* ── Progress ── */
+  #progress-wrap { display: none; flex-direction: column; gap: 10px; }
+  #progress-wrap.visible { display: flex; }
+  .progress-bar-bg {
+    height: 6px;
+    background: var(--track);
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--amber);
+    transition: width .1s linear;
+    border-radius: 3px;
+    box-shadow: 0 0 8px var(--amber-dim);
+  }
+  .progress-label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+  }
+  .progress-label span { color: var(--amber); }
+
+  /* ── Buttons ── */
+  .btn-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  button {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    padding: 12px 28px;
+    border-radius: 3px;
+    border: none;
+    cursor: pointer;
+    transition: opacity .15s, background .15s;
+  }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  #btn-render {
+    background: var(--amber);
+    color: #000;
+  }
+  #btn-render:not(:disabled):hover { background: var(--amber-glow); }
+  #btn-cancel {
+    background: transparent;
+    border: 1px solid var(--red);
+    color: var(--red);
+    display: none;
+  }
+  #btn-cancel.visible { display: inline-flex; align-items: center; gap: 6px; }
+  #btn-cancel:not(:disabled):hover { background: rgba(220,38,38,.1); }
+
+  /* ── Status ── */
+  #status {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    min-height: 18px;
+  }
+  #status.ok  { color: var(--green); }
+  #status.err { color: var(--red); }
+  #status.warn { color: var(--amber); }
+
+  /* ── Data info pills ── */
+  #data-info {
+    display: none;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #data-info.visible { display: flex; }
+  .pill {
+    background: var(--track);
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    padding: 5px 12px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .pill span { color: var(--amber); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FlySight Speedometer</h1>
+  <span>GPS → VIDEO</span>
+</header>
+
+<main>
+
+  <!-- FILE INPUT -->
+  <div class="card">
+    <div class="card-header">01 / Data Source</div>
+    <div class="card-body">
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept=".csv,.CSV">
+        <div class="dropzone-icon">📂</div>
+        <p>Drop your <strong>.CSV</strong> file here or click to browse</p>
+        <p style="font-size:12px;margin-top:6px;color:var(--text-dim)">Requires: time, velN, velE, velD columns</p>
+        <div class="filename" id="filename-display"></div>
+      </div>
+      <div id="data-info" style="margin-top:14px;">
+        <div class="pill">Records: <span id="info-rows">—</span></div>
+        <div class="pill">Duration: <span id="info-duration">—</span></div>
+        <div class="pill">Max H-Speed: <span id="info-maxh">—</span></div>
+        <div class="pill">Max V-Speed: <span id="info-maxv">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SPEED TYPE -->
+  <div class="card">
+    <div class="card-header">02 / Speed Channel</div>
+    <div class="card-body">
+      <div class="radio-group">
+        <label><input type="radio" name="speedtype" value="horizontal" checked><span>Horizontal</span></label>
+        <label><input type="radio" name="speedtype" value="vertical"><span>Vertical</span></label>
+        <label><input type="radio" name="speedtype" value="total"><span>Total</span></label>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="card">
+    <div class="card-header">03 / Output Settings</div>
+    <div class="card-body">
+      <div class="settings-grid">
+        <div class="field">
+          <label>Width (px)</label>
+          <input type="number" id="set-width" value="800" min="320" max="1024" step="2">
+        </div>
+        <div class="field">
+          <label>Height (px)</label>
+          <input type="number" id="set-height" value="600" min="180" max="1024" step="2">
+        </div>
+        <div class="field">
+          <label>Max Speed (km/h) — 0 = auto</label>
+          <input type="number" id="set-maxspeed" value="0" min="0" max="1000" step="10">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PREVIEW -->
+  <div class="card">
+    <div class="card-header">04 / Preview</div>
+    <div class="card-body" style="padding:0;overflow:hidden;border-radius:0 0 3px 3px;">
+      <div id="preview-wrap">
+        <div id="preview-placeholder">LOAD A CSV FILE TO PREVIEW</div>
+        <canvas id="preview-canvas" style="display:none;"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- RENDER -->
+  <div class="card">
+    <div class="card-header">05 / Render</div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+      <div id="progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+        <div class="progress-label">
+          <span id="progress-frames">0 / 0 frames</span>
+          <span id="progress-pct">0%</span>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="btn-render" disabled>⬡ Render Video</button>
+        <button id="btn-cancel">✕ Cancel</button>
+      </div>
+      <div id="status"></div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Hidden work canvas -->
+<canvas id="work-canvas" style="display:none;"></canvas>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+let csvData = null;      // parsed rows
+let cancelFlag = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV parser
+// ─────────────────────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  // Find header row (contains 'time')
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    if (lines[i].toLowerCase().includes('time') && lines[i].toLowerCase().includes('veln')) {
+      headerIdx = i; break;
+    }
+  }
+  const headers = lines[headerIdx].split(',').map(h => h.trim().toLowerCase());
+  const rows = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const vals = line.split(',');
+    // Skip unit row (mostly empty or degree symbols)
+    if (vals[0].startsWith('(') || vals[0] === '') continue;
+    const row = {};
+    headers.forEach((h, idx) => { row[h] = vals[idx] ? vals[idx].trim() : ''; });
+    // Must have a valid time and velocity columns
+    if (row.time && row.veln !== undefined && row.vele !== undefined && row.veld !== undefined) {
+      const velN = parseFloat(row.veln);
+      const velE = parseFloat(row.vele);
+      const velD = parseFloat(row.veld);
+      if (isNaN(velN) || isNaN(velE) || isNaN(velD)) continue;
+      rows.push({ time: row.time, velN, velE, velD });
+    }
+  }
+  return rows;
+}
+
+function computeSpeeds(rows, type) {
+  return rows.map(r => {
+    const h = Math.sqrt(r.velN**2 + r.velE**2) * 3.6;
+    const v = r.velD * 3.6;
+    const t = Math.sqrt(h**2 + v**2);
+    return type === 'horizontal' ? h : type === 'vertical' ? Math.abs(v) : t;
+  });
+}
+
+function parseDuration(rows) {
+  try {
+    const t0 = new Date(rows[0].time);
+    const t1 = new Date(rows[rows.length - 1].time);
+    return (t1 - t0) / 1000; // seconds
+  } catch { return rows.length * 0.2; }
+}
+
+function autoMaxSpeed(speeds) {
+  const rawMax = Math.max(...speeds);
+  const steps = [20, 50, 120, 230, 500];
+  for (const step of steps) {
+    const ms = Math.ceil(rawMax / step) * step;
+    if (ms >= rawMax * 1.1) return ms;
+  }
+  return Math.ceil(rawMax / 100) * 100;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Speedometer drawing (Canvas 2D — mirrors the Python logic)
+// ─────────────────────────────────────────────────────────────────────────────
+const DEG = Math.PI / 180;
+const START_ANGLE = 200;  // degrees (CCW from right, 0 speed)
+const END_ANGLE   = 20;   // degrees (max speed)
+
+function polarToXY(cx, cy, r, angleDeg) {
+  const rad = angleDeg * DEG;
+  return [cx + r * Math.cos(rad), cy - r * Math.sin(rad)];
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function drawArc(ctx, cx, cy, radius, startDeg, endDeg, color, lineWidth) {
+  // Convert our angle convention (0=right, CCW+) to Canvas (0=right, CW+)
+  const s = -startDeg * DEG;
+  const e = -endDeg * DEG;
+  ctx.beginPath();
+  // Determine direction: CCW in our system = CW in canvas (anticlockwise=true)
+  ctx.arc(cx, cy, radius, s, e, false); // sweep CW in canvas
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+}
+
+function renderFrame(canvas, speed, maxSpeed) {
+  const W = canvas.width, H = canvas.height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W / 2;
+  const cy = H * 0.62;
+  const R  = Math.min(W, H) * 0.42;
+  const ratio = Math.min(Math.max(speed / maxSpeed, 0), 1);
+
+  // Needle angle in our convention
+  const needleAngle = START_ANGLE + ratio * (END_ANGLE - START_ANGLE);
+
+  // ── Inactive track ──
+  {
+    const s = -START_ANGLE * DEG, e = -END_ANGLE * DEG;
+    // Outer shadow ring
+    ctx.beginPath(); ctx.arc(cx, cy, R, s, e, false);
+    ctx.strokeStyle = '#191919'; ctx.lineWidth = R * 0.105; ctx.stroke();
+    // Track
+    ctx.beginPath(); ctx.arc(cx, cy, R, s, e, false);
+    ctx.strokeStyle = '#232323'; ctx.lineWidth = R * 0.065; ctx.stroke();
+  }
+
+  // ── Active arc ──
+  if (speed > 0) {
+    const s = -START_ANGLE * DEG, e = -needleAngle * DEG;
+    ctx.beginPath(); ctx.arc(cx, cy, R, s, e, false);
+    const grad = ctx.createLinearGradient(...polarToXY(cx, cy, R, START_ANGLE), ...polarToXY(cx, cy, R, needleAngle));
+    grad.addColorStop(0, '#884400');
+    grad.addColorStop(1, '#ff9520');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = R * 0.038;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+
+    // Glow dot at tip
+    const [tx, ty] = polarToXY(cx, cy, R, needleAngle);
+    const grd = ctx.createRadialGradient(tx, ty, 0, tx, ty, R * 0.065);
+    grd.addColorStop(0, 'rgba(255,160,50,0.45)');
+    grd.addColorStop(1, 'rgba(255,120,20,0)');
+    ctx.beginPath(); ctx.arc(tx, ty, R * 0.065, 0, 2*Math.PI);
+    ctx.fillStyle = grd; ctx.fill();
+  }
+
+  // ── Outer rim ──
+  {
+    const s = -START_ANGLE * DEG, e = -END_ANGLE * DEG;
+    ctx.beginPath(); ctx.arc(cx, cy, R + R * 0.055, s, e, false);
+    ctx.strokeStyle = '#383838'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  // ── Tick marks & labels ──
+  const NUM_MAJOR = 10, NUM_MINOR = 5;
+  const TOTAL = NUM_MAJOR * NUM_MINOR;
+
+  for (let i = 0; i <= TOTAL; i++) {
+    const t = i / TOTAL;
+    const angle = lerp(START_ANGLE, END_ANGLE, t);
+    const isMajor  = (i % NUM_MINOR === 0);
+    const isMedium = (i % NUM_MINOR === 2 || i % NUM_MINOR === 3);
+
+    let innerR, outerR, lw;
+    if (isMajor)       { innerR = R*0.88; outerR = R*0.982; lw = Math.max(1.5, R*0.009); }
+    else if (isMedium) { innerR = R*0.918; outerR = R*0.982; lw = Math.max(1, R*0.006); }
+    else               { innerR = R*0.94;  outerR = R*0.982; lw = Math.max(1, R*0.005); }
+
+    const [x1,y1] = polarToXY(cx, cy, innerR, angle);
+    const [x2,y2] = polarToXY(cx, cy, outerR, angle);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+    ctx.strokeStyle = isMajor ? '#c8c8b8' : '#444440';
+    ctx.lineWidth = lw; ctx.stroke();
+
+    if (isMajor) {
+      const labelVal = Math.round(t * maxSpeed);
+      const labelR = R * 0.79;
+      const [lx, ly] = polarToXY(cx, cy, labelR, angle);
+      // Font size is a direct fraction of R — no secondary scaling factor
+      const fontSize = R * 0.095;
+      ctx.font = `600 ${fontSize}px 'Barlow Condensed', sans-serif`;
+      ctx.fillStyle = '#a8a8a0';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(labelVal), lx, ly);
+    }
+  }
+
+  // ── Needle ──
+  const [ntx, nty] = polarToXY(cx, cy, R * 0.86, needleAngle);
+  const [nb1x, nb1y] = polarToXY(cx, cy, R * 0.1, needleAngle + 90);
+  const [nb2x, nb2y] = polarToXY(cx, cy, R * 0.1, needleAngle - 90);
+
+  // Shadow
+  const off = R * 0.018;
+  ctx.beginPath();
+  ctx.moveTo(ntx+off, nty+off); ctx.lineTo(nb1x+off, nb1y+off); ctx.lineTo(nb2x+off, nb2y+off);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+
+  // Body (red)
+  ctx.beginPath();
+  ctx.moveTo(ntx, nty); ctx.lineTo(nb1x, nb1y); ctx.lineTo(nb2x, nb2y);
+  ctx.fillStyle = '#e02020'; ctx.fill();
+
+  // Gloss line
+  const midBx = (nb1x+nb2x)/2, midBy = (nb1y+nb2y)/2;
+  ctx.beginPath(); ctx.moveTo(midBx, midBy); ctx.lineTo(ntx, nty);
+  ctx.strokeStyle = 'rgba(255,120,120,0.6)'; ctx.lineWidth = Math.max(1, R*0.005); ctx.stroke();
+
+  // Hub rings
+  [
+    {r: R*0.11, color:'#141414'},
+    {r: R*0.073, color:'#3c3c3c'},
+    {r: R*0.037, color:'#e02020'},
+  ].forEach(({r, color}) => {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI);
+    ctx.fillStyle = color; ctx.fill();
+  });
+  ctx.beginPath(); ctx.arc(cx, cy, R*0.11, 0, 2*Math.PI);
+  ctx.strokeStyle = '#484848'; ctx.lineWidth = Math.max(1.5, R*0.009); ctx.stroke();
+
+  // ── Unit label ──
+  {
+    const unitSize = R * 0.085;
+    ctx.font = `400 ${unitSize}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = '#606058';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('km/h', cx, cy - R * 0.22);
+  }
+
+  // ── Digital readout ──
+  {
+    const [aex, aey] = polarToXY(cx, cy, R, END_ANGLE);
+    const rx = aex - R * 0.15;
+    const ry = aey + R * 0.55;
+
+    const speedStr = String(Math.round(speed));
+    // Direct fraction of R, no secondary scaling. 0.37 ≈ 2/3 of previous intent.
+    const numSize = R * 0.37;
+
+    // Glow shadow
+    ctx.font = `700 ${numSize}px 'Barlow Condensed', sans-serif`;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+    ctx.shadowColor = 'rgba(0,60,90,0.9)';
+    ctx.shadowBlur = R * 0.04;
+    ctx.fillStyle = 'rgba(0,50,70,0.7)';
+    ctx.fillText(speedStr, rx, ry);
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(speedStr, rx, ry);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Smooth speed interpolation (mirrors Python smooth_speeds)
+// ─────────────────────────────────────────────────────────────────────────────
+function smoothSpeeds(speeds, fps, intervalSeconds) {
+  const framesPerInterval = Math.round(fps * intervalSeconds);
+  const frames = [];
+  for (let i = 0; i < speeds.length - 1; i++) {
+    for (let f = 0; f < framesPerInterval; f++) {
+      const t = f / framesPerInterval;
+      const ts = t * t * (3 - 2 * t); // smoothstep
+      frames.push(lerp(speeds[i], speeds[i+1], ts));
+    }
+  }
+  frames.push(speeds[speeds.length - 1]);
+  return frames;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function setStatus(msg, cls='') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls;
+}
+
+function setDisabled(disabled) {
+  ['file-input','set-width','set-height','set-maxspeed'].forEach(id => {
+    document.getElementById(id).disabled = disabled;
+  });
+  document.querySelectorAll('input[name=speedtype]').forEach(r => r.disabled = disabled);
+  document.getElementById('btn-render').disabled = disabled;
+  const cancel = document.getElementById('btn-cancel');
+  if (disabled) { cancel.classList.add('visible'); }
+  else          { cancel.classList.remove('visible'); }
+}
+
+function updatePreview() {
+  if (!csvData) return;
+  const type = document.querySelector('input[name=speedtype]:checked').value;
+  const speeds = computeSpeeds(csvData, type);
+  const maxSpeedInput = parseFloat(document.getElementById('set-maxspeed').value) || 0;
+  const maxSpeed = maxSpeedInput > 0 ? maxSpeedInput : autoMaxSpeed(speeds);
+
+  // Preview at a mid-point frame
+  const midIdx = Math.floor(speeds.length / 2);
+  const previewSpeed = speeds[midIdx];
+
+  const W = 640, H = 360;
+  const canvas = document.getElementById('preview-canvas');
+  canvas.width = W; canvas.height = H;
+  renderFrame(canvas, previewSpeed, maxSpeed);
+  canvas.style.display = 'block';
+  document.getElementById('preview-placeholder').style.display = 'none';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File input handler
+// ─────────────────────────────────────────────────────────────────────────────
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const rows = parseCSV(e.target.result);
+      if (rows.length < 2) { setStatus('ERROR: Not enough valid data rows found.', 'err'); return; }
+      csvData = rows;
+
+      document.getElementById('filename-display').textContent = file.name;
+
+      // Info pills
+      const dur = parseDuration(rows);
+      const hs = computeSpeeds(rows, 'horizontal');
+      const vs = computeSpeeds(rows, 'vertical');
+      document.getElementById('info-rows').textContent = rows.length;
+      document.getElementById('info-duration').textContent = dur.toFixed(1) + 's';
+      document.getElementById('info-maxh').textContent = Math.max(...hs).toFixed(1) + ' km/h';
+      document.getElementById('info-maxv').textContent = Math.max(...vs).toFixed(1) + ' km/h';
+      document.getElementById('data-info').classList.add('visible');
+
+      document.getElementById('btn-render').disabled = false;
+      setStatus(`Loaded ${rows.length} records · ${dur.toFixed(1)}s of data`, 'ok');
+      updatePreview();
+    } catch(err) {
+      setStatus('ERROR: ' + err.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main render routine — uses VideoEncoder for frame-accurate timestamps
+// ─────────────────────────────────────────────────────────────────────────────
+async function renderVideo() {
+  if (!csvData) return;
+  cancelFlag = false;
+
+  const type       = document.querySelector('input[name=speedtype]:checked').value;
+  const W          = parseInt(document.getElementById('set-width').value)  || 800;
+  const H          = parseInt(document.getElementById('set-height').value) || 600;
+  const maxSpeedIn = parseFloat(document.getElementById('set-maxspeed').value) || 0;
+  const FPS        = 30;
+
+  const rawSpeeds = computeSpeeds(csvData, type);
+  const maxSpeed  = maxSpeedIn > 0 ? maxSpeedIn : autoMaxSpeed(rawSpeeds);
+
+  // Real recording duration from time column
+  const duration    = parseDuration(csvData);   // seconds
+  const totalFrames = Math.round(duration * FPS);
+
+  // Build per-frame speed array interpolated from real timestamps
+  // Each csvData row has a .time string; interpolate speed to exact frame timestamps
+  function buildFrameSpeeds() {
+    // Build (timestamp_seconds, speed) pairs from rows
+    const t0ms = new Date(csvData[0].time).getTime();
+    const points = csvData.map((row, i) => {
+      const tSec = (new Date(row.time).getTime() - t0ms) / 1000;
+      const h = Math.sqrt(row.velN**2 + row.velE**2) * 3.6;
+      const v = row.velD * 3.6;
+      const spd = type === 'horizontal' ? h : type === 'vertical' ? Math.abs(v) : Math.sqrt(h**2+v**2);
+      return { t: tSec, spd };
+    });
+
+    const frames = new Float32Array(totalFrames);
+    let pi = 0; // pointer into points[]
+    for (let f = 0; f < totalFrames; f++) {
+      const frameSec = f / FPS;
+      // Advance pointer until we bracket frameSec
+      while (pi < points.length - 2 && points[pi + 1].t <= frameSec) pi++;
+      const p0 = points[pi], p1 = points[Math.min(pi+1, points.length-1)];
+      const span = p1.t - p0.t;
+      if (span < 1e-9) {
+        frames[f] = p0.spd;
+      } else {
+        const t = (frameSec - p0.t) / span;
+        const ts = t * t * (3 - 2 * t); // smoothstep
+        frames[f] = lerp(p0.spd, p1.spd, ts);
+      }
+    }
+    return frames;
+  }
+
+  const frameSpeedsArr = buildFrameSpeeds();
+
+  setDisabled(true);
+  document.getElementById('progress-wrap').classList.add('visible');
+  setStatus(`Rendering ${totalFrames} frames at ${FPS}fps (${duration.toFixed(1)}s)…`, 'warn');
+
+  const workCanvas = document.getElementById('work-canvas');
+  workCanvas.width  = W;
+  workCanvas.height = H;
+  const ctx2d = workCanvas.getContext('2d');
+
+  // We always use the mp4-muxer + VideoEncoder path if available,
+  // otherwise fall back to MediaRecorder with enforced real-time pacing.
+  const hasMp4Muxer = typeof window.Mp4Muxer !== 'undefined';
+  const hasVideoEncoder = typeof VideoEncoder !== 'undefined';
+
+  if (hasVideoEncoder && hasMp4Muxer) {
+    await renderWithVideoEncoder(workCanvas, ctx2d, frameSpeedsArr, totalFrames, W, H, FPS, maxSpeed, type, duration);
+  } else {
+    // Warn if falling back
+    if (!hasVideoEncoder) setStatus('VideoEncoder not supported — using real-time MediaRecorder fallback…', 'warn');
+    else if (!hasMp4Muxer) setStatus('mp4-muxer not loaded — using WebM fallback…', 'warn');
+    await renderWithMediaRecorder(workCanvas, ctx2d, frameSpeedsArr, totalFrames, W, H, FPS, maxSpeed, type, duration);
+  }
+}
+
+// ── VideoEncoder + mp4-muxer path ─────────────────────────────────────────
+async function renderWithVideoEncoder(workCanvas, ctx2d, frameSpeedsArr, totalFrames, W, H, FPS, maxSpeed, type, duration) {
+  const { Muxer, ArrayBufferTarget } = window.Mp4Muxer;
+  const target = new ArrayBufferTarget();
+  const muxer = new Muxer({
+    target,
+    video: { codec: 'avc', width: W, height: H },
+    fastStart: 'in-memory',
+  });
+
+  let encoderError = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: e => { encoderError = e; },
+  });
+  encoder.configure({
+    codec: 'avc1.42001f',
+    width: W, height: H,
+    bitrate: 8_000_000,
+    framerate: FPS,
+  });
+
+  const progressFill   = document.getElementById('progress-fill');
+  const progressFrames = document.getElementById('progress-frames');
+  const progressPct    = document.getElementById('progress-pct');
+  const usPerFrame     = Math.round(1_000_000 / FPS);
+
+  for (let i = 0; i < totalFrames; i++) {
+    if (cancelFlag) {
+      encoder.close(); muxer.finalize();
+      setDisabled(false);
+      document.getElementById('progress-wrap').classList.remove('visible');
+      setStatus('Cancelled.', '');
+      return;
+    }
+    if (encoderError) {
+      setStatus('Encoder error: ' + encoderError.message, 'err');
+      setDisabled(false);
+      return;
+    }
+
+    renderFrame(workCanvas, frameSpeedsArr[i], maxSpeed);
+
+    const frame = new VideoFrame(workCanvas, { timestamp: i * usPerFrame, duration: usPerFrame });
+    encoder.encode(frame, { keyFrame: i % (FPS * 2) === 0 });
+    frame.close();
+
+    const pct = ((i + 1) / totalFrames * 100).toFixed(1);
+    progressFill.style.width = pct + '%';
+    progressFrames.textContent = `${i+1} / ${totalFrames} frames`;
+    progressPct.textContent = pct + '%';
+
+    if (i % 15 === 14) await new Promise(r => setTimeout(r, 0));
+  }
+
+  await encoder.flush();
+  muxer.finalize();
+  encoder.close();
+
+  const { buffer } = target;
+  const blob = new Blob([buffer], { type: 'video/mp4' });
+  triggerDownload(blob, `speedometer_${type}.mp4`, totalFrames, duration);
+}
+
+// ── MediaRecorder fallback — render at real-time pace so timestamps are right ─
+async function renderWithMediaRecorder(workCanvas, ctx2d, frameSpeedsArr, totalFrames, W, H, FPS, maxSpeed, type, duration) {
+  const stream = workCanvas.captureStream(FPS);
+  const mime   = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+                 ? 'video/webm;codecs=vp9' : 'video/webm';
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.start();
+
+  const progressFill   = document.getElementById('progress-fill');
+  const progressFrames = document.getElementById('progress-frames');
+  const progressPct    = document.getElementById('progress-pct');
+  const msPerFrame     = 1000 / FPS;
+
+  setStatus(`Rendering in real-time (no VideoEncoder) — ${duration.toFixed(0)}s remaining…`, 'warn');
+
+  for (let i = 0; i < totalFrames; i++) {
+    if (cancelFlag) {
+      recorder.stop();
+      setDisabled(false);
+      document.getElementById('progress-wrap').classList.remove('visible');
+      setStatus('Cancelled.', '');
+      return;
+    }
+
+    const frameStart = performance.now();
+    renderFrame(workCanvas, frameSpeedsArr[i], maxSpeed);
+
+    const pct = ((i + 1) / totalFrames * 100).toFixed(1);
+    progressFill.style.width = pct + '%';
+    progressFrames.textContent = `${i+1} / ${totalFrames} frames`;
+    progressPct.textContent = pct + '%';
+
+    // Pace to real-time so MediaRecorder timestamps are correct
+    const elapsed = performance.now() - frameStart;
+    const wait = msPerFrame - elapsed;
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    else await new Promise(r => setTimeout(r, 0)); // yield at minimum
+  }
+
+  recorder.stop();
+  await new Promise(resolve => { recorder.onstop = resolve; });
+
+  const blob = new Blob(chunks, { type: mime });
+  triggerDownload(blob, `speedometer_${type}.webm`, totalFrames, duration);
+}
+
+function triggerDownload(blob, filename, totalFrames, duration) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+  setDisabled(false);
+  setStatus(`Done! ${totalFrames} frames · ${duration.toFixed(1)}s · ${(blob.size/1024/1024).toFixed(1)} MB`, 'ok');
+  document.getElementById('progress-wrap').classList.remove('visible');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event wiring
+// ─────────────────────────────────────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', e => {
+  handleFile(e.target.files[0]);
+});
+
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('drag-over');
+  handleFile(e.dataTransfer.files[0]);
+});
+
+document.querySelectorAll('input[name=speedtype]').forEach(r =>
+  r.addEventListener('change', updatePreview)
+);
+document.getElementById('set-maxspeed').addEventListener('input', updatePreview);
+
+document.getElementById('btn-render').addEventListener('click', renderVideo);
+document.getElementById('btn-cancel').addEventListener('click', () => { cancelFlag = true; });
+</script>
+</body>
+</html>
