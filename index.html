@@ -394,6 +394,7 @@
 // State
 // ─────────────────────────────────────────────────────────────────────────────
 let csvData = null;      // parsed rows
+let csvBaseName = '';    // original filename without extension
 let cancelFlag = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -751,6 +752,7 @@ function handleFile(file) {
       const rows = parseCSV(e.target.result);
       if (rows.length < 2) { setStatus('ERROR: Not enough valid data rows found.', 'err'); return; }
       csvData = rows;
+      csvBaseName = file.name.replace(/\.[^.]+$/, '');
 
       document.getElementById('filename-display').textContent = file.name;
 
@@ -913,7 +915,7 @@ async function renderWithVideoEncoder(workCanvas, ctx2d, frameSpeedsArr, totalFr
 
   const { buffer } = target;
   const blob = new Blob([buffer], { type: 'video/mp4' });
-  triggerDownload(blob, `speedometer_${type}.mp4`, totalFrames, duration);
+  triggerDownload(blob, `${csvBaseName}_gauge_${type}_speed.mp4`, totalFrames, duration);
 }
 
 // ── MediaRecorder fallback — render at real-time pace so timestamps are right ─
@@ -961,7 +963,7 @@ async function renderWithMediaRecorder(workCanvas, ctx2d, frameSpeedsArr, totalF
   await new Promise(resolve => { recorder.onstop = resolve; });
 
   const blob = new Blob(chunks, { type: mime });
-  triggerDownload(blob, `speedometer_${type}.webm`, totalFrames, duration);
+  triggerDownload(blob, `${csvBaseName}_gauge_${type}_speed.webm`, totalFrames, duration);
 }
 
 function triggerDownload(blob, filename, totalFrames, duration) {
