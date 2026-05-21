@@ -606,7 +606,7 @@ function renderFrame(canvas, speed, maxSpeed) {
     ctx.lineWidth = lw; ctx.stroke();
 
     if (isMajor) {
-      const labelVal = Math.round(t * maxSpeed);
+      const labelVal = Math.round(t * maxSpeed / 10) * 10;
       const labelR = R * 0.79;
       const [lx, ly] = polarToXY(cx, cy, labelR, angle);
       // Font size is a direct fraction of R — no secondary scaling factor
