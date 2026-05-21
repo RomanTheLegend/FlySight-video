@@ -309,7 +309,7 @@
         <input type="file" id="file-input" accept=".csv,.CSV">
         <div class="dropzone-icon">📂</div>
         <p>Drop your <strong>.CSV</strong> file here or click to browse</p>
-        <p style="font-size:12px;margin-top:6px;color:var(--text-dim)">Requires: time, velN, velE, velD columns</p>
+        <p style="font-size:12px;margin-top:6px;color:var(--text-dim)">Plain GPS CSV or FlySight v2 format · needs time, velN, velE, velD</p>
         <div class="filename" id="filename-display"></div>
       </div>
       <div id="data-info" style="margin-top:14px;">
@@ -339,11 +339,11 @@
     <div class="card-body">
       <div class="settings-grid">
         <div class="field">
-          <label>Width (px)</label>
+          <label>Width (px) — max 1024</label>
           <input type="number" id="set-width" value="800" min="320" max="1024" step="2">
         </div>
         <div class="field">
-          <label>Height (px)</label>
+          <label>Height (px) — max 1024</label>
           <input type="number" id="set-height" value="600" min="180" max="1024" step="2">
         </div>
         <div class="field">
@@ -397,11 +397,57 @@ let csvData = null;      // parsed rows
 let cancelFlag = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CSV parser
+// CSV parser — handles two formats:
+//   1. Plain GPS CSV:  header row with time,lat,lon,...,velN,velE,velD,...
+//   2. FlySight v2:    $COL,GNSS,time,... / $DATA / $GNSS,<values>,...
 // ─────────────────────────────────────────────────────────────────────────────
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
-  // Find header row (contains 'time')
+
+  // ── Detect FlySight v2 format (lines starting with '$') ──────────────────
+  const isFlySight = lines.some(l => l.startsWith('$FLYS') || l.startsWith('$COL,'));
+  if (isFlySight) return parseFlySightCSV(lines);
+  return parsePlainCSV(lines);
+}
+
+function parseFlySightCSV(lines) {
+  // Find the $COL,GNSS line to get column names
+  let colHeaders = null;
+  for (const line of lines) {
+    if (line.startsWith('$COL,GNSS,')) {
+      // e.g. "$COL,GNSS,time,lat,lon,hMSL,velN,velE,velD,..."
+      // strip "$COL,GNSS," prefix → remaining tokens are the column names
+      colHeaders = line.slice('$COL,GNSS,'.length).split(',').map(h => h.trim().toLowerCase());
+      break;
+    }
+  }
+  if (!colHeaders) throw new Error('FlySight CSV: could not find $COL,GNSS header line.');
+
+  const timeIdx = colHeaders.indexOf('time');
+  const velNIdx = colHeaders.indexOf('veln');
+  const velEIdx = colHeaders.indexOf('vele');
+  const velDIdx = colHeaders.indexOf('veld');
+  if ([timeIdx, velNIdx, velEIdx, velDIdx].includes(-1))
+    throw new Error('FlySight CSV: missing required columns (time, velN, velE, velD).');
+
+  const rows = [];
+  for (const line of lines) {
+    if (!line.startsWith('$GNSS,')) continue;
+    // Strip "$GNSS," prefix, then split values
+    const vals = line.slice('$GNSS,'.length).split(',');
+    const velN = parseFloat(vals[velNIdx]);
+    const velE = parseFloat(vals[velEIdx]);
+    const velD = parseFloat(vals[velDIdx]);
+    if (isNaN(velN) || isNaN(velE) || isNaN(velD)) continue;
+    const time = vals[timeIdx] ? vals[timeIdx].trim() : '';
+    if (!time) continue;
+    rows.push({ time, velN, velE, velD });
+  }
+  return rows;
+}
+
+function parsePlainCSV(lines) {
+  // Find header row (contains 'time' and 'veln')
   let headerIdx = 0;
   for (let i = 0; i < Math.min(5, lines.length); i++) {
     if (lines[i].toLowerCase().includes('time') && lines[i].toLowerCase().includes('veln')) {
@@ -414,11 +460,10 @@ function parseCSV(text) {
     const line = lines[i].trim();
     if (!line) continue;
     const vals = line.split(',');
-    // Skip unit row (mostly empty or degree symbols)
+    // Skip unit row (starts with '(' or is empty)
     if (vals[0].startsWith('(') || vals[0] === '') continue;
     const row = {};
     headers.forEach((h, idx) => { row[h] = vals[idx] ? vals[idx].trim() : ''; });
-    // Must have a valid time and velocity columns
     if (row.time && row.veln !== undefined && row.vele !== undefined && row.veld !== undefined) {
       const velN = parseFloat(row.veln);
       const velE = parseFloat(row.vele);
@@ -737,8 +782,8 @@ async function renderVideo() {
   cancelFlag = false;
 
   const type       = document.querySelector('input[name=speedtype]:checked').value;
-  const W          = parseInt(document.getElementById('set-width').value)  || 800;
-  const H          = parseInt(document.getElementById('set-height').value) || 600;
+  const W          = Math.min(1024, parseInt(document.getElementById('set-width').value)  || 800);
+  const H          = Math.min(1024, parseInt(document.getElementById('set-height').value) || 600);
   const maxSpeedIn = parseFloat(document.getElementById('set-maxspeed').value) || 0;
   const FPS        = 30;
 
